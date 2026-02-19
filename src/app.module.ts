@@ -4,10 +4,15 @@ import { AppService } from './app.service';
 import { TransactionsModule } from './transactions/transactions.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { CategoriesModule } from './categories/categories.module';
+import { BudgetModule } from './budget/budget.module';
+import { BudgetTemplateModule } from './budget-template/budget-template.module';
+import { ConfigModule } from '@nestjs/config';
 
 @Module({
   imports: [
-
+    ConfigModule.forRoot({
+      isGlobal: true,
+    }),
     TypeOrmModule.forRoot({
       /*  type: 'postgres',
         host: 'localhost', // ou l'adresse de votre serveur DB
@@ -17,14 +22,16 @@ import { CategoriesModule } from './categories/categories.module';
         database: 'gestion_depenses_db',*/
       // entities: [Transaction],
       type: 'postgres',
-      url: 'postgresql://neondb_owner:npg_dOm91qBnVhrk@ep-lively-term-ajbfhkmw-pooler.c-3.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require',
+      url: process.env.DATABASE_URL,
       autoLoadEntities: true,
-     // synchronize: false, // désactive en production
+      // synchronize: false, // désactive en production
       entities: [__dirname + '/**/*.entity{.ts,.js}'],
       synchronize: true, // À désactiver en production
     }),
     TransactionsModule,
-    CategoriesModule
+    CategoriesModule,
+    BudgetModule,
+    BudgetTemplateModule
   ],
   controllers: [AppController],
   providers: [AppService],
