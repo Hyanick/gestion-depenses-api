@@ -1,8 +1,9 @@
-import { Body, Controller, Get, Param, Post, Put, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Put, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { BudgetService } from './budget.service';
-import { ReplaceMonthDto } from './dto/replace-month.dto';
+import type { CurrentUserType } from 'src/auth/current-user.decorator';
+import { CurrentUser } from 'src/auth/current-user.decorator';
 import { JwtAuthGuard } from 'src/auth/jwt.guard';
+import { BudgetService } from './budget.service';
 
 @ApiTags('budgets')
 @UseGuards(JwtAuthGuard)
@@ -11,34 +12,34 @@ export class BudgetController {
   constructor(private readonly budgetService: BudgetService) { }
 
   @Get(':monthKey')
-  getMonth(@Param('monthKey') monthKey: string, @Req() req: any) {
-    return this.budgetService.getMonth(req.user.userId, monthKey);
+  getMonth(@Param('monthKey') monthKey: string, @CurrentUser() u: CurrentUserType,) {
+    return this.budgetService.getMonth(u.id, monthKey);
   }
   /*
   getMonth(@Param('monthKey') monthKey: string) {
     return this.service.getMonth(monthKey);
   }
 */
-/*
-  @Post(':monthKey/seed-from-template')
-  seed(@Param('monthKey') monthKey: string) {
-    return this.budgetService.seedFromTemplate(monthKey);
-  }
-*/
+  /*
+    @Post(':monthKey/seed-from-template')
+    seed(@Param('monthKey') monthKey: string) {
+      return this.budgetService.seedFromTemplate(monthKey);
+    }
+  */
   @Post(':toKey/duplicate-from/:fromKey')
-  duplicate(@Param('fromKey') fromKey: string, @Param('toKey') toKey: string, @Req() req: any) {
-    return this.budgetService.duplicate(req.user.userId, fromKey, toKey);
+  duplicate(@Param('fromKey') fromKey: string, @Param('toKey') toKey: string, @CurrentUser() u: CurrentUserType,) {
+    return this.budgetService.duplicate(u.id, fromKey, toKey);
   }
 
   @Post(':monthKey/reset-from-template')
-  reset(@Param('monthKey') monthKey: string, @Req() req: any) {
-    return this.budgetService.resetFromTemplate(req.user.userId, monthKey);
+  reset(@Param('monthKey') monthKey: string, @CurrentUser() u: CurrentUserType,) {
+    return this.budgetService.resetFromTemplate(u.id, monthKey);
   }
 
   // ✅ batch flush
   @Put(':monthKey')
-  replaceMonth(@Param('monthKey') monthKey: string, @Body() dto: any, @Req() req: any) {
-    return this.budgetService.replaceMonth(req.user.userId, monthKey, dto);
+  replaceMonth(@Param('monthKey') monthKey: string, @Body() dto: any, @CurrentUser() u: CurrentUserType,) {
+    return this.budgetService.replaceMonth(u.id, monthKey, dto);
   }
   /*
   replaceMonth(@Param('monthKey') monthKey: string, @Body() dto: ReplaceMonthDto) {

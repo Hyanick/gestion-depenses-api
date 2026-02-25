@@ -1,47 +1,138 @@
-import { Injectable, UnauthorizedException, BadRequestException } from '@nestjs/common';
-
-import * as bcrypt from 'bcrypt';
+import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
 import { JwtService } from '@nestjs/jwt';
-import { UsersService } from 'src/users/user.service';
+import * as bcrypt from 'bcrypt';
+import { Repository } from 'typeorm';
+
+import { UserEntity } from '../users/user.entity';
+import { ACCESS_TOKEN_TTL, REFRESH_COOKIE_NAME, REFRESH_TOKEN_TTL } from './auth.constants';
+import { RegisterDto } from './dto/register.dto';
+import { LoginDto } from './dto/login.dto';
+
+type Tokens = { accessToken: string; refreshToken: string };
 
 @Injectable()
 export class AuthService {
-  constructor(private users: UsersService, private jwt: JwtService) {}
+  private accessSecret = process.env.JWT_ACCESS_SECRET || 'dev_access_secret';
+  private refreshSecret = process.env.JWT_REFRESH_SECRET || 'dev_refresh_secret';
 
-  async register(dto: any) {
-    const existing = await this.users.findByUsername(dto.username);
-    if (existing) throw new BadRequestException('Username déjà utilisé');
+  constructor(
+    @InjectRepository(UserEntity) private readonly users: Repository<UserEntity>,
+    private readonly jwt: JwtService,
+  ) { }
 
-    const hash = await bcrypt.hash(dto.password, 10);
+  private signTokens(user: UserEntity): Tokens {
+    const payload = { sub: user.id, username: user.username };
 
-    const user = await this.users.create({
-      name: dto.name,
-      username: dto.username,
-      email: dto.email,
-      phone: dto.phone,
-      passwordHash: hash,
+    const accessToken = this.jwt.sign(payload, {
+      secret: this.accessSecret,
+      expiresIn: ACCESS_TOKEN_TTL,
     });
 
-    const token = await this.jwt.signAsync({
-      sub: user.id,
-      username: user.username,
+    const refreshToken = this.jwt.sign(payload, {
+      secret: this.refreshSecret,
+      expiresIn: REFRESH_TOKEN_TTL,
     });
 
-    return { token, user };
+    return { accessToken, refreshToken };
   }
 
-  async login(dto: any) {
-    const user = await this.users.findByUsername(dto.username);
-    if (!user) throw new UnauthorizedException();
+  private async setRefreshToken(userId: string, refreshToken: string) {
+    const hash = await bcrypt.hash(refreshToken, 10);
+    await this.users.update({ id: userId }, { refreshTokenHash: hash });
+  }
+
+  async register(dto: RegisterDto) {
+    const contactOk = !!(dto.email?.trim() || dto.phone?.trim());
+    if (!contactOk) throw new BadRequestException('Email ou téléphone requis.');
+
+    const exists = await this.users.findOne({
+      where: [{ username: dto.username }, { email: dto.email }, { phone: dto.phone }],
+    });
+
+    if (exists) throw new BadRequestException('Utilisateur déjà existant.');
+
+    const passwordHash = await bcrypt.hash(dto.password, 10);
+
+    const user = await this.users.save(
+      this.users.create({
+        name: dto.name.trim(),
+        username: dto.username.trim(),
+        email: dto.email?.trim() || null,
+        phone: dto.phone?.trim() || null,
+        passwordHash,
+      }),
+    );
+    await this.users.update({ id: user.id }, { lastLoginAt: new Date() });
+
+    const tokens = this.signTokens(user);
+    await this.setRefreshToken(user.id, tokens.refreshToken);
+
+    return {
+      user: { id: user.id, name: user.name, username: user.username },
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken, // on le met aussi en cookie côté controller
+    };
+  }
+
+  async login(dto: LoginDto) {
+    const user = await this.users.findOne({ where: { username: dto.username } });
+    if (!user) throw new UnauthorizedException('Identifiants invalides.');
 
     const ok = await bcrypt.compare(dto.password, user.passwordHash);
-    if (!ok) throw new UnauthorizedException();
+    if (!ok) throw new UnauthorizedException('Identifiants invalides.');
 
-    const token = await this.jwt.signAsync({
-      sub: user.id,
-      username: user.username,
-    });
+    const tokens = this.signTokens(user);
+    await this.setRefreshToken(user.id, tokens.refreshToken);
+    await this.users.update({ id: user.id }, { lastLoginAt: new Date() });
 
-    return { token, user };
+    return {
+      user: { id: user.id, name: user.name, username: user.username },
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+    };
   }
+
+  async logout(userId: string) {
+    await this.users.update({ id: userId }, { refreshTokenHash: null });
+    return { ok: true };
+  }
+
+  async refresh(userId: string, refreshToken: string) {
+    const user = await this.users.findOne({ where: { id: userId } });
+    if (!user || !user.refreshTokenHash) throw new UnauthorizedException('Refresh invalide.');
+
+    const match = await bcrypt.compare(refreshToken, user.refreshTokenHash);
+    if (!match) throw new UnauthorizedException('Refresh invalide.');
+
+    const tokens = this.signTokens(user);
+    // rotation
+    await this.setRefreshToken(user.id, tokens.refreshToken);
+
+    return {
+      user: { id: user.id, name: user.name, username: user.username },
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+    };
+  }
+
+  // utile si tu veux /me
+  async getMe(userId: string) {
+    const user = await this.users.findOne({ where: { id: userId } });
+    if (!user) throw new UnauthorizedException();
+    return { id: user.id, name: user.name, username: user.username, email: user.email, phone: user.phone };
+  }
+
+  verifyRefreshTokenOrThrow(token: string) {
+    try {
+      return this.jwt.verify(token, { secret: this.refreshSecret }) as { sub: string; username: string };
+    } catch {
+      throw new UnauthorizedException('Refresh expiré ou invalide.');
+    }
+  }
+
+  getRefreshCookieName() {
+    return REFRESH_COOKIE_NAME;
+  }
+
 }

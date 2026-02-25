@@ -1,11 +1,12 @@
-import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
+// src/users/user.entity.ts
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn } from 'typeorm';
 
 @Entity('users')
 export class UserEntity {
     @PrimaryGeneratedColumn('uuid')
     id!: string;
 
-    @Column({ length: 120 })
+    @Column()
     name!: string;
 
     @Column({ unique: true })
@@ -17,8 +18,15 @@ export class UserEntity {
     @Column({ nullable: true, unique: true })
     phone?: string;
 
-    @Column({ name: 'password_hash' })
+    @Column()
     passwordHash!: string;
+
+    @Column({ nullable: true })
+    refreshTokenHash?: string | null;
+
+    // ✅ NEW
+    @Column({ type: 'timestamptz', nullable: true })
+    lastLoginAt?: Date | null;
 
     @CreateDateColumn()
     createdAt!: Date;
