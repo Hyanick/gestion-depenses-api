@@ -1,22 +1,34 @@
-import { Entity, PrimaryGeneratedColumn, Column, OneToMany, CreateDateColumn, UpdateDateColumn } from 'typeorm';
-import { BudgetLine } from './budget-line.entity';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  OneToMany,
+  CreateDateColumn,
+  UpdateDateColumn,
+  Index,
+} from 'typeorm';
+import { BudgetLineEntity } from './budget-line.entity';
 
 @Entity('budget_months')
-export class BudgetMonth {
+@Index(['userId', 'monthKey'], { unique: true }) // ✅ UNIQUE PAR USER + MOIS
+export class BudgetMonthEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ unique: true })
-  monthKey: string; // "2026-02"
+  @Column()
+  monthKey: string; // ✅ plus unique ici
 
   @Column({ default: 'template' })
   createdFrom: 'template' | 'duplicate' | 'manual';
 
-  @OneToMany(() => BudgetLine, (line) => line.month, {
+  @Column({ name: 'user_id', type: 'uuid' })
+  userId!: string;
+
+  @OneToMany(() => BudgetLineEntity, (line) => line.month, {
     cascade: true,
     eager: true,
   })
-  lines: BudgetLine[];
+  lines: BudgetLineEntity[];
 
   @CreateDateColumn()
   createdAt: Date;

@@ -1,124 +1,180 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { BudgetMonth } from './budget-month.entity';
-import { BudgetLine } from './budget-line.entity';
-import { BudgetTemplateLine } from '../budget-template/budget-template-line.entity';
-import { ReplaceMonthDto } from './dto/replace-month.dto';
+import { BudgetMonthEntity } from './budget-month.entity';
+import { BudgetLineEntity } from './budget-line.entity';
+
+
 
 @Injectable()
 export class BudgetService {
   constructor(
-    @InjectRepository(BudgetMonth) private monthRepo: Repository<BudgetMonth>,
-    @InjectRepository(BudgetLine) private lineRepo: Repository<BudgetLine>,
-    @InjectRepository(BudgetTemplateLine) private templateRepo: Repository<BudgetTemplateLine>,
-  ) {}
+    @InjectRepository(BudgetMonthEntity)
+    private readonly monthRepo: Repository<BudgetMonthEntity>,
 
-  async getMonth(monthKey: string) {
-    const month = await this.monthRepo.findOne({ where: { monthKey } });
-    if (!month) throw new NotFoundException();
-    return month;
-  }
+    @InjectRepository(BudgetLineEntity)
+    private readonly lineRepo: Repository<BudgetLineEntity>,
+  ) { }
 
-  async seedFromTemplate(monthKey: string) {
-    const templateLines = await this.templateRepo.find();
+  /*
+  ============================================================
+  LOAD MONTH
+  ============================================================
+  */
 
-    const month = this.monthRepo.create({
-      monthKey,
-      createdFrom: 'template',
-      lines: templateLines.map((t) =>
-        this.lineRepo.create({
-          type: t.type,
-          category: t.category,
-          label: t.label,
-          amount: Number(t.amount),
-          icon: t.icon,
-          color: t.color,
-        }),
-      ),
+  async getMonth(userId: string, monthKey: string) {
+    let month = await this.monthRepo.findOne({
+      where: { monthKey, userId },
+      relations: ['lines'],
+      order: { lines: { createdAt: 'ASC' } },
     });
 
-    return this.monthRepo.save(month);
-  }
-
-  async duplicate(fromKey: string, toKey: string) {
-    const from = await this.getMonth(fromKey);
-
-    const month = this.monthRepo.create({
-      monthKey: toKey,
-      createdFrom: 'duplicate',
-      lines: from.lines.map((l) =>
-        this.lineRepo.create({
-          type: l.type,
-          category: l.category,
-          label: l.label,
-          amount: Number(l.amount),
-          icon: l.icon,
-          color: l.color,
-        }),
-      ),
-    });
-
-    return this.monthRepo.save(month);
-  }
-
-  async resetFromTemplate(monthKey: string) {
-    const month = await this.getMonth(monthKey);
-    await this.lineRepo.delete({ month });
-
-    const templateLines = await this.templateRepo.find();
-    month.lines = templateLines.map((t) =>
-      this.lineRepo.create({
-        type: t.type,
-        category: t.category,
-        label: t.label,
-        amount: Number(t.amount),
-        icon: t.icon,
-        color: t.color,
-      }),
-    );
-    month.createdFrom = 'template';
-
-    return this.monthRepo.save(month);
-  }
-
-  /**
-   * ✅ BATCH FLUSH
-   * Remplace le contenu du mois par les lignes envoyées
-   * - crée le mois s'il n'existe pas
-   * - supprime les anciennes lignes
-   * - insère les nouvelles
-   */
-  async replaceMonth(monthKey: string, dto: ReplaceMonthDto) {
-    let month = await this.monthRepo.findOne({ where: { monthKey } });
-
+    // Si mois inexistant → création automatique
     if (!month) {
       month = await this.monthRepo.save(
         this.monthRepo.create({
           monthKey,
-          createdFrom: dto.createdFrom ?? 'manual',
+          userId,
           lines: [],
         }),
       );
     }
 
-    await this.lineRepo.delete({ month });
+    return month;
+  }
 
-    const lines = dto.lines.map((l) =>
+  /*
+  ============================================================
+  REPLACE MONTH (flush batch depuis frontend)
+  ============================================================
+  */
+
+  async replaceMonth(userId: string, monthKey: string, dto: any) {
+    let month = await this.monthRepo.findOne({
+      where: { monthKey, userId },
+      relations: ['lines'],
+    });
+
+    // Création mois si inexistant
+
+    if (!month) {
+      try {
+        month = await this.monthRepo.save(this.monthRepo.create({ monthKey, userId }));
+      } catch (e: any) {
+        if (e?.code === '23505') {
+          month = await this.monthRepo.findOne({ where: { monthKey, userId }, relations: ['lines'] });
+        } else {
+          throw e;
+        }
+      }
+      /*
+      month = await this.monthRepo.save(
+        this.monthRepo.create({
+          monthKey,
+          userId,
+        }),
+      )
+        */
+    }
+
+    /*
+    --------------------------------------------
+    Supprimer anciennes lignes
+    --------------------------------------------
+    */
+
+    if (month.lines?.length) {
+      await this.lineRepo.delete({
+        month: { id: month.id },
+      });
+    }
+
+    /*
+    --------------------------------------------
+    Créer nouvelles lignes
+    --------------------------------------------
+    */
+
+    const lines = (dto.lines ?? []).map((l: any) =>
       this.lineRepo.create({
-        type: l.type,
-        category: l.category,
-        label: l.label,
+        type: l.type ?? 'expense',
+        category: l.category ?? '',
+        label: l.label ?? '',
         amount: Number(l.amount) || 0,
-        icon: l.icon,
-        color: l.color,
+        icon: l.icon ?? 'payments',
+        color: l.color ?? '#64748b',
         month,
       }),
     );
 
     await this.lineRepo.save(lines);
 
-    // re-fetch month with eager lines
-    return this.getMonth(monthKey);
+    return this.getMonth(userId, monthKey);
+  }
+
+  /*
+  ============================================================
+  RESET MONTH (depuis template plus tard)
+  ============================================================
+  */
+
+  async resetFromTemplate(userId: string, monthKey: string) {
+    const month = await this.monthRepo.findOne({
+      where: { monthKey, userId },
+      relations: ['lines'],
+    });
+
+    if (!month) return;
+
+    await this.lineRepo.delete({ month: { id: month.id } });
+
+    return this.getMonth(userId, monthKey);
+  }
+
+  /*
+  ============================================================
+  DUPLICATE MONTH
+  ============================================================
+  */
+
+  async duplicate(userId: string, fromMonthKey: string, toMonthKey: string) {
+    const from = await this.monthRepo.findOne({
+      where: { monthKey: fromMonthKey, userId },
+      relations: ['lines'],
+    });
+
+    if (!from) return this.getMonth(userId, toMonthKey);
+
+    let target = await this.monthRepo.findOne({
+      where: { monthKey: toMonthKey, userId },
+      relations: ['lines'],
+    });
+
+    if (!target) {
+      target = await this.monthRepo.save(
+        this.monthRepo.create({
+          monthKey: toMonthKey,
+          userId,
+        }),
+      );
+    }
+
+    await this.lineRepo.delete({ month: { id: target.id } });
+
+    const copied = from.lines.map((l) =>
+      this.lineRepo.create({
+        type: l.type,
+        category: l.category,
+        label: l.label,
+        amount: l.amount,
+        icon: l.icon,
+        color: l.color,
+        month: target,
+      }),
+    );
+
+    await this.lineRepo.save(copied);
+
+    return this.getMonth(userId, toMonthKey);
   }
 }

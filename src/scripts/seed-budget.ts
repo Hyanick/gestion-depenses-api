@@ -1,27 +1,28 @@
 import { DataSource } from 'typeorm';
-import { BudgetMonth } from '../budget/budget-month.entity';
-import { BudgetLine } from '../budget/budget-line.entity';
+
 import { BudgetTemplateLine } from '../budget-template/budget-template-line.entity';
+import { BudgetMonthEntity } from 'src/budget/budget-month.entity';
+import { BudgetLineEntity } from 'src/budget/budget-line.entity';
 
 const ds = new DataSource({
     type: 'postgres',
     url: 'postgresql://neondb_owner:npg_dOm91qBnVhrk@ep-lively-term-ajbfhkmw-pooler.c-3.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require',
-    entities: [BudgetMonth, BudgetLine, BudgetTemplateLine],
+    entities: [BudgetMonthEntity, BudgetLineEntity, BudgetTemplateLine],
     synchronize: true,
 });
 
 async function run() {
     await ds.initialize();
 
-    const monthRepo = ds.getRepository(BudgetMonth);
-    const lineRepo = ds.getRepository(BudgetLine);
+    const monthRepo = ds.getRepository(BudgetMonthEntity);
+    const lineRepo = ds.getRepository(BudgetLineEntity);
     const templateRepo = ds.getRepository(BudgetTemplateLine);
 
     console.log('🧹 Cleaning tables...');
 
     // ✅ DELETE en ordre FK-safe (évite TRUNCATE + FK constraint)
-    await ds.createQueryBuilder().delete().from(BudgetLine).execute();
-    await ds.createQueryBuilder().delete().from(BudgetMonth).execute();
+    await ds.createQueryBuilder().delete().from(BudgetLineEntity).execute();
+    await ds.createQueryBuilder().delete().from(BudgetMonthEntity).execute();
     await ds.createQueryBuilder().delete().from(BudgetTemplateLine).execute();
 
     console.log('📦 Inserting template...');

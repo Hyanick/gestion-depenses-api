@@ -1,8 +1,9 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne } from 'typeorm';
-import { BudgetMonth } from './budget-month.entity';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn } from 'typeorm';
+import { BudgetMonthEntity } from './budget-month.entity';
+
 
 @Entity('budget_lines')
-export class BudgetLine {
+export class BudgetLineEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
@@ -24,6 +25,11 @@ export class BudgetLine {
   @Column()
   color: string;
 
-  @ManyToOne(() => BudgetMonth, (month) => month.lines, { onDelete: 'CASCADE' })
-  month: BudgetMonth;
+  @CreateDateColumn()
+  createdAt!: Date;
+
+  @ManyToOne(() => BudgetMonthEntity, (month) => month.lines, { onDelete: 'CASCADE' })
+  month: BudgetMonthEntity;
+
+
 }
