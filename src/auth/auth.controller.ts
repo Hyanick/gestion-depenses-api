@@ -1,13 +1,13 @@
 import { Body, Controller, Get, Post, Req, Res, UseGuards } from '@nestjs/common';
-import type { Request, Response } from 'express';
+import type { Response, Request } from 'express';
 
 import { AuthService } from './auth.service';
-import type { CurrentUserType } from './current-user.decorator';
-import { CurrentUser } from './current-user.decorator';
-import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
-import { JwtAuthGuard } from './jwt.guard';
+import { LoginDto } from './dto/login.dto';
 
+import { CurrentUser } from './current-user.decorator';
+import type { CurrentUserType } from './current-user.decorator';
+import { JwtAuthGuard } from './jwt.guard';
 
 @Controller('api/auth')
 export class AuthController {
@@ -17,9 +17,9 @@ export class AuthController {
         res.cookie(this.auth.getRefreshCookieName(), token, {
             httpOnly: true,
             sameSite: 'lax',
-            secure: false, // ✅ true en prod HTTPS
+            secure: false,
             path: '/api/auth/refresh',
-            maxAge: 1000 * 60 * 60 * 24 * 30, // 30 jours
+            maxAge: 1000 * 60 * 60 * 24 * 30,
         });
     }
 
@@ -27,16 +27,33 @@ export class AuthController {
         res.clearCookie(this.auth.getRefreshCookieName(), { path: '/api/auth/refresh' });
     }
 
+    private getMeta(req: Request) {
+        return {
+            ip: (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim()
+                || req.socket?.remoteAddress
+                || null,
+            userAgent: req.headers['user-agent'] || null,
+        };
+    }
+
     @Post('register')
-    async register(@Body() dto: RegisterDto, @Res({ passthrough: true }) res: Response) {
-        const out = await this.auth.register(dto);
+    async register(
+        @Body() dto: RegisterDto,
+        @Req() req: Request,
+        @Res({ passthrough: true }) res: Response,
+    ) {
+        const out = await this.auth.register(dto, this.getMeta(req));
         this.setRefreshCookie(res, out.refreshToken);
         return { user: out.user, accessToken: out.accessToken };
     }
 
     @Post('login')
-    async login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
-        const out = await this.auth.login(dto);
+    async login(
+        @Body() dto: LoginDto,
+        @Req() req: Request,
+        @Res({ passthrough: true }) res: Response,
+    ) {
+        const out = await this.auth.login(dto, this.getMeta(req));
         this.setRefreshCookie(res, out.refreshToken);
         return { user: out.user, accessToken: out.accessToken };
     }
@@ -47,7 +64,7 @@ export class AuthController {
         const token = (req.cookies?.[cookieName] as string | undefined) ?? '';
 
         const payload = this.auth.verifyRefreshTokenOrThrow(token);
-        const out = await this.auth.refresh(payload.sub, token);
+        const out = await this.auth.refresh(payload.sub, token, this.getMeta(req));
 
         this.setRefreshCookie(res, out.refreshToken);
         return { user: out.user, accessToken: out.accessToken };
@@ -55,7 +72,10 @@ export class AuthController {
 
     @UseGuards(JwtAuthGuard)
     @Post('logout')
-    async logout(@CurrentUser() user: CurrentUserType, @Res({ passthrough: true }) res: Response) {
+    async logout(
+        @CurrentUser() user: CurrentUserType,
+        @Res({ passthrough: true }) res: Response,
+    ) {
         await this.auth.logout(user.id);
         this.clearRefreshCookie(res);
         return { ok: true };

@@ -1,10 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+
 import { BudgetMonthEntity } from './budget-month.entity';
 import { BudgetLineEntity } from './budget-line.entity';
-
-
+import { BudgetLineHistoryEntity } from './budget-line-history.entity';
 
 @Injectable()
 export class BudgetService {
@@ -14,40 +14,65 @@ export class BudgetService {
 
     @InjectRepository(BudgetLineEntity)
     private readonly lineRepo: Repository<BudgetLineEntity>,
-  ) { }
 
-  /*
-  ============================================================
-  LOAD MONTH
-  ============================================================
-  */
+    @InjectRepository(BudgetLineHistoryEntity)
+    private readonly historyRepo: Repository<BudgetLineHistoryEntity>,
+  ) {}
+
+  private sanitizeLine(l: any) {
+    if (!l) return null;
+    const { month, ...rest } = l;
+    return rest;
+  }
+
+  private async logHistory(
+    userId: string,
+    monthKey: string,
+    action: 'create' | 'update' | 'delete' | 'replace_month',
+    opts: { lineId?: string | null; before?: any; after?: any } = {},
+  ) {
+    await this.historyRepo.save(
+      this.historyRepo.create({
+        userId,
+        monthKey,
+        action,
+        lineId: opts.lineId ?? null,
+        before: opts.before ?? null,
+        after: opts.after ?? null,
+      }),
+    );
+  }
 
   async getMonth(userId: string, monthKey: string) {
     let month = await this.monthRepo.findOne({
       where: { monthKey, userId },
       relations: ['lines'],
-      order: { lines: { createdAt: 'ASC' } },
     });
 
-    // Si mois inexistant → création automatique
     if (!month) {
-      month = await this.monthRepo.save(
-        this.monthRepo.create({
-          monthKey,
-          userId,
-          lines: [],
-        }),
-      );
+      try {
+        month = await this.monthRepo.save(
+          this.monthRepo.create({
+            monthKey,
+            userId,
+            lines: [],
+          }),
+        );
+      } catch (e: any) {
+        // sécurité si concurrence
+        if (e?.code === '23505') {
+          month = await this.monthRepo.findOne({
+            where: { monthKey, userId },
+            relations: ['lines'],
+          });
+        } else {
+          throw e;
+        }
+      }
     }
 
     return month;
   }
-
-  /*
-  ============================================================
-  REPLACE MONTH (flush batch depuis frontend)
-  ============================================================
-  */
 
   async replaceMonth(userId: string, monthKey: string, dto: any) {
     let month = await this.monthRepo.findOne({
@@ -55,45 +80,33 @@ export class BudgetService {
       relations: ['lines'],
     });
 
-    // Création mois si inexistant
-
     if (!month) {
       try {
-        month = await this.monthRepo.save(this.monthRepo.create({ monthKey, userId }));
+        month = await this.monthRepo.save(
+          this.monthRepo.create({
+            monthKey,
+            userId,
+          }),
+        );
       } catch (e: any) {
         if (e?.code === '23505') {
-          month = await this.monthRepo.findOne({ where: { monthKey, userId }, relations: ['lines'] });
+          month = await this.monthRepo.findOne({
+            where: { monthKey, userId },
+            relations: ['lines'],
+          });
         } else {
           throw e;
         }
       }
-      /*
-      month = await this.monthRepo.save(
-        this.monthRepo.create({
-          monthKey,
-          userId,
-        }),
-      )
-        */
     }
 
-    /*
-    --------------------------------------------
-    Supprimer anciennes lignes
-    --------------------------------------------
-    */
+    const beforeLines = (month?.lines ?? []).map((l) => this.sanitizeLine(l));
 
     if (month.lines?.length) {
       await this.lineRepo.delete({
         month: { id: month.id },
       });
     }
-
-    /*
-    --------------------------------------------
-    Créer nouvelles lignes
-    --------------------------------------------
-    */
 
     const lines = (dto.lines ?? []).map((l: any) =>
       this.lineRepo.create({
@@ -107,16 +120,16 @@ export class BudgetService {
       }),
     );
 
-    await this.lineRepo.save(lines);
+    const savedLines = await this.lineRepo.save(lines);
+    const afterLines = savedLines.map((l) => this.sanitizeLine(l));
+
+    await this.logHistory(userId, monthKey, 'replace_month', {
+      before: beforeLines,
+      after: afterLines,
+    });
 
     return this.getMonth(userId, monthKey);
   }
-
-  /*
-  ============================================================
-  RESET MONTH (depuis template plus tard)
-  ============================================================
-  */
 
   async resetFromTemplate(userId: string, monthKey: string) {
     const month = await this.monthRepo.findOne({
@@ -126,16 +139,17 @@ export class BudgetService {
 
     if (!month) return;
 
+    const beforeLines = (month.lines ?? []).map((l) => this.sanitizeLine(l));
+
     await this.lineRepo.delete({ month: { id: month.id } });
+
+    await this.logHistory(userId, monthKey, 'replace_month', {
+      before: beforeLines,
+      after: [],
+    });
 
     return this.getMonth(userId, monthKey);
   }
-
-  /*
-  ============================================================
-  DUPLICATE MONTH
-  ============================================================
-  */
 
   async duplicate(userId: string, fromMonthKey: string, toMonthKey: string) {
     const from = await this.monthRepo.findOne({
@@ -151,13 +165,26 @@ export class BudgetService {
     });
 
     if (!target) {
-      target = await this.monthRepo.save(
-        this.monthRepo.create({
-          monthKey: toMonthKey,
-          userId,
-        }),
-      );
+      try {
+        target = await this.monthRepo.save(
+          this.monthRepo.create({
+            monthKey: toMonthKey,
+            userId,
+          }),
+        );
+      } catch (e: any) {
+        if (e?.code === '23505') {
+          target = await this.monthRepo.findOne({
+            where: { monthKey: toMonthKey, userId },
+            relations: ['lines'],
+          });
+        } else {
+          throw e;
+        }
+      }
     }
+
+    const beforeLines = (target.lines ?? []).map((l) => this.sanitizeLine(l));
 
     await this.lineRepo.delete({ month: { id: target.id } });
 
@@ -173,7 +200,12 @@ export class BudgetService {
       }),
     );
 
-    await this.lineRepo.save(copied);
+    const saved = await this.lineRepo.save(copied);
+
+    await this.logHistory(userId, toMonthKey, 'replace_month', {
+      before: beforeLines,
+      after: saved.map((l) => this.sanitizeLine(l)),
+    });
 
     return this.getMonth(userId, toMonthKey);
   }

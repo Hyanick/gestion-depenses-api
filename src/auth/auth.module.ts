@@ -7,14 +7,17 @@ import { UserEntity } from '../users/user.entity';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt.strategy';
+import { AuthLoginHistoryEntity } from './auth-login-history.entity';
+import { AuthHistoryController } from './auth-login-history.controller';
+
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([UserEntity]),
+    TypeOrmModule.forFeature([UserEntity, AuthLoginHistoryEntity]),
     PassportModule,
-    JwtModule.register({}), // secret géré dans AuthService avec process.env
+    JwtModule.register({}),
   ],
-  controllers: [AuthController],
+  controllers: [AuthController, AuthHistoryController],
   providers: [AuthService, JwtStrategy],
   exports: [AuthService],
 })
